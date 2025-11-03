@@ -84,9 +84,9 @@ func writeTrackDetailsToPipe(pipePath string, details *TrackDetails) error {
 	// Format the track details as a single line
 	var output string
 	if details != nil {
-		output = fmt.Sprintf("Track: %s\nArtists: %s\nAlbum: %s\nProgress: %.2f\n", details.Name, details.Artists, details.Album, details.Progress)
+		output = fmt.Sprintf("%s - %s", details.Name, details.Artists)
 	} else {
-		output = "No track currently playing\n"
+		output = "No track currently playing"
 	}
 
 	// Write to the pipe
@@ -177,9 +177,7 @@ func fetchTrackDetails(client *spotify.Client) (*TrackDetails, error) {
 // createTempNamedPipe creates a temporary named pipe (FIFO) called "spyplayer" in the system's temp directory.
 // Returns the full path to the FIFO, or an error if creation fails.
 func createTempNamedPipe() (string, error) {
-	tmpDir := os.TempDir()
-	pipePath := tmpDir + "spyplayer"
-
+	pipePath := "/tmp/spyplayer"
 	_ = os.Remove(pipePath)
 
 	// Create the named pipe using mkfifo
