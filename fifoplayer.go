@@ -19,8 +19,8 @@ import (
 type FifoPipeName string
 
 const (
-	pipeTrackDetails FifoPipeName = "spyplayer-track"
-	pipeTrackControl FifoPipeName = "spyplayer-control"
+	pipeTrackDetails FifoPipeName = "fifoplayer-track"
+	pipeTrackControl FifoPipeName = "fifoplayer-control"
 )
 
 type TrackControlAction string
@@ -271,7 +271,7 @@ func fetchTrackDetails(client *spotify.Client) (*TrackDetails, error) {
 	return nil, nil
 }
 
-// createTempNamedPipe creates a temporary named pipe (FIFO) called "spyplayer" in the system's temp directory.
+// createTempNamedPipe creates a temporary named pipe (FIFO) in the system's temp directory.
 // Returns the full path to the FIFO, or an error if creation fails.
 func createTempNamedPipe(name FifoPipeName) (string, error) {
 	pipePath := fmt.Sprintf("/tmp/%s", name)

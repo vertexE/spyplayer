@@ -1,4 +1,4 @@
-module github.com/vertexE/spyplayer
+module github.com/vertexE/fifoplayer
 
 go 1.24.0
 
@@ -9,4 +9,4 @@ require (
 	github.com/zmb3/spotify/v2 v2.4.3
 )
 
-require golang.org/x/oauth2 v0.32.0 // indirect
+require golang.org/x/oauth2 v0.32.0
