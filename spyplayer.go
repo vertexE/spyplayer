@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -15,9 +16,24 @@ import (
 	"golang.org/x/oauth2"
 )
 
+type FifoPipeName string
+
+const (
+	pipeTrackDetails FifoPipeName = "spyplayer-track"
+	pipeTrackControl FifoPipeName = "spyplayer-control"
+)
+
+type TrackControlAction string
+
+const (
+	Play  TrackControlAction = "play"
+	Pause TrackControlAction = "pause"
+	Next  TrackControlAction = "next"
+)
+
 func main() {
 	authenticator := setupAuthenticator()
-	startServer(authenticator)
+	startFifoPipes(authenticator)
 }
 
 func setupAuthenticator() *spotifyauth.Authenticator {
@@ -38,36 +54,80 @@ func setupAuthenticator() *spotifyauth.Authenticator {
 		spotifyauth.WithClientID(clientID),
 		spotifyauth.WithClientSecret(clientSecret),
 		spotifyauth.WithRedirectURL(redirectURI),
-		spotifyauth.WithScopes(spotifyauth.ScopeUserReadCurrentlyPlaying, spotifyauth.ScopeUserReadPlaybackState),
+		spotifyauth.WithScopes(
+			spotifyauth.ScopeUserReadCurrentlyPlaying,
+			spotifyauth.ScopeUserReadPlaybackState,
+			spotifyauth.ScopeUserModifyPlaybackState,
+		),
 	)
 	return authenticator
 }
 
 // this sets up a temporary named pipe and then
 // handles sending the data on regular cadence (every 5 seconds)
-func startServer(authenticator *spotifyauth.Authenticator) {
+func startFifoPipes(authenticator *spotifyauth.Authenticator) {
 	client, token := setupClient(authenticator)
-	pipe, err := createTempNamedPipe()
+
+	go func() {
+		pipe, err := createTempNamedPipe(pipeTrackDetails)
+		if err != nil {
+			log.Fatalf("could not make named pipe: %v", err)
+		}
+
+		for {
+			if token.Expiry.Before(time.Now()) {
+				client, token = refreshTokenAndClient(authenticator, token)
+			}
+
+			details, err := fetchTrackDetails(client)
+			if err != nil {
+				log.Fatalf("unable to fetch track details: %v", err)
+			}
+
+			err = writeTrackDetailsToPipe(pipe, details)
+			if err != nil {
+				log.Fatalf("unable to write to named pipe: %v", err)
+			}
+
+			time.Sleep(time.Second * 3)
+		}
+	}()
+
+	pipe, err := createTempNamedPipe(pipeTrackControl)
 	if err != nil {
 		log.Fatalf("could not make named pipe: %v", err)
 	}
 
 	for {
-		if token.Expiry.Before(time.Now()) {
-			client, token = refreshTokenAndClient(authenticator, token)
-		}
-
-		details, err := fetchTrackDetails(client)
+		action, err := readTrackControlFromPipe(pipe)
 		if err != nil {
 			log.Fatalf("unable to fetch track details: %v", err)
 		}
 
-		err = writeTrackDetailsToPipe(pipe, details)
-		if err != nil {
-			log.Fatalf("unable to write to named pipe: %v", err)
+		if token.Expiry.Before(time.Now()) {
+			client, token = refreshTokenAndClient(authenticator, token)
 		}
 
-		time.Sleep(time.Second * 5)
+		switch action {
+		case Play:
+			if err := client.Play(context.Background()); err != nil {
+				log.Printf("failed to play track: %v\n", err)
+			} else {
+				log.Println("playing track")
+			}
+		case Pause:
+			if err := client.Pause(context.Background()); err != nil {
+				log.Printf("failed to pause track: %v\n", err)
+			} else {
+				log.Println("paused track")
+			}
+		case Next:
+			if err := client.Next(context.Background()); err != nil {
+				log.Printf("failed to skip track: %v\n", err)
+			} else {
+				log.Println("skipped track")
+			}
+		}
 	}
 }
 
@@ -94,6 +154,25 @@ func writeTrackDetailsToPipe(pipePath string, details *TrackDetails) error {
 	return err
 }
 
+func readTrackControlFromPipe(pipePath string) (TrackControlAction, error) {
+	// Open the pipe for reading
+	pipeFile, err := os.OpenFile(pipePath, os.O_RDONLY|os.O_SYNC, os.ModeNamedPipe)
+	if err != nil {
+		return "", err
+	}
+	defer pipeFile.Close()
+
+	// Read up to 128 bytes from the pipe (enough for a simple action string)
+	buf := make([]byte, 128)
+	n, err := pipeFile.Read(buf)
+	if err != nil {
+		return "", err
+	}
+
+	// Trim whitespace and convert to TrackControlAction
+	action := TrackControlAction(strings.TrimSpace(string(buf[:n])))
+	return action, nil
+}
 func refreshTokenAndClient(authenticator *spotifyauth.Authenticator, token *oauth2.Token) (*spotify.Client, *oauth2.Token) {
 	authenticator.RefreshToken(context.Background(), token)
 	httpClient := authenticator.Client(context.Background(), token)
@@ -176,16 +255,16 @@ func fetchTrackDetails(client *spotify.Client) (*TrackDetails, error) {
 
 // createTempNamedPipe creates a temporary named pipe (FIFO) called "spyplayer" in the system's temp directory.
 // Returns the full path to the FIFO, or an error if creation fails.
-func createTempNamedPipe() (string, error) {
-	pipePath := "/tmp/spyplayer"
+func createTempNamedPipe(name FifoPipeName) (string, error) {
+	pipePath := fmt.Sprintf("/tmp/%s", name)
 	_ = os.Remove(pipePath)
 
 	// Create the named pipe using mkfifo
-	fmt.Println("creating named pipe")
+	log.Println("creating named pipe")
 	if err := exec.Command("mkfifo", pipePath).Run(); err != nil {
 		return "", err
 	}
-	fmt.Printf("created pipe %s\n", pipePath)
+	log.Printf("created pipe %s\n", pipePath)
 
 	return pipePath, nil
 }
