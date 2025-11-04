@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"net/url"
+	"net/http"
 	"os"
 	"os/exec"
 	"strings"
@@ -181,21 +181,39 @@ func refreshTokenAndClient(authenticator *spotifyauth.Authenticator, token *oaut
 }
 
 func setupClient(authenticator *spotifyauth.Authenticator) (*spotify.Client, *oauth2.Token) {
-	// Get the auth URL and instruct the user to visit it
 	spotifyAuthUrl := authenticator.AuthURL("state-token")
-	fmt.Println("Please log in to Spotify by visiting the following page in your browser:", spotifyAuthUrl)
-
-	// Wait for redirect with code (requires you to run a local web server or use the CLI)
-	// For simplicity, we'll ask the user to paste the redirected URL here.
-	fmt.Print("Paste the redirect URL here: ")
-	var redirect string
-	fmt.Scanln(&redirect)
-
-	parsedURL, err := url.Parse(redirect)
-	if err != nil {
-		log.Fatalf("could not parse url %v", err)
+	if err := exec.Command("open", spotifyAuthUrl).Run(); err != nil {
+		log.Fatalf("could not open the spotifyAuthUrl")
 	}
-	code := parsedURL.Query().Get("code")
+
+	// Channel to receive the code from the HTTP handler
+	codeCh := make(chan string)
+
+	// Start local HTTP server for callback
+	srv := &http.Server{Addr: ":8080"}
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		code := r.URL.Query().Get("code")
+		if code == "" {
+			http.Error(w, "No code in callback", http.StatusBadRequest)
+			return
+		}
+		fmt.Fprintf(w, "Login successful! You may close this window.")
+		codeCh <- code
+	})
+
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("HTTP server error: %v", err)
+		}
+	}()
+
+	// Wait for code from callback
+	code := <-codeCh
+
+	// Shutdown server after receiving code
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	defer cancel()
+	_ = srv.Shutdown(ctx)
 
 	token, err := authenticator.Exchange(context.Background(), code)
 	if err != nil {
